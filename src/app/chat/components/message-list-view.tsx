@@ -740,8 +740,8 @@ function FinalPaperCard({
   }, [message.content]);
 
   const handleDownload = useCallback(() => {
-    const content = paperData.content || message.content || "";
-    const title = paperData.title || "Final_Report";
+    const content = paperData.content ?? message.content ?? "";
+    const title = paperData.title ?? "Final_Report";
     
     const blob = new Blob([content], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -755,7 +755,7 @@ function FinalPaperCard({
   }, [paperData, message.content]);
 
   const hasContent = useMemo(() => {
-    return !!(paperData.content?.trim() || message.content?.trim());
+    return !!(paperData.content?.trim() ?? message.content?.trim());
   }, [paperData.content, message.content]);
 
   return (
@@ -764,14 +764,14 @@ function FinalPaperCard({
         <div className="text-muted-foreground flex items-center gap-2 text-sm">
           {isGenerating ? <LoadingOutlined /> : <FileText size={16} />}
           <RainbowText animated={isGenerating}>
-            {isGenerating ? "Generating Final Report..." : (paperData.title || "Final Report")}
+            {isGenerating ? "Generating Final Report..." : (paperData.title ?? "Final Report")}
           </RainbowText>
         </div>
       </CardHeader>
       <CardContent>
         <div className="prose prose-sm max-w-none">
           <Markdown animated checkLinkCredibility>
-            {paperData.content || message.content || ""}
+            {paperData.content ?? message.content ?? ""}
           </Markdown>
         </div>
         {message.isStreaming && <LoadingAnimation className="my-4" />}
