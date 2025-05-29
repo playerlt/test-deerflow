@@ -51,7 +51,7 @@ export const useStore = create<{
   // Final paper methods
   fetchFinalPaper: (threadId: string) => Promise<void>;
   clearFinalPaper: () => void;
-}>((set, get) => ({
+}>((set, _get) => ({
   responding: false,
   threadId: THREAD_ID,
   messageIds: [],
@@ -131,6 +131,29 @@ export const useStore = create<{
       console.log("📄 Final paper preview:", finalPaper.final_paper?.substring(0, 200) + "...");
       set({ finalPaper, finalPaperLoading: false });
       console.log("✅ Final paper stored in state successfully");
+      
+      // Create a new message card for the final paper
+      if (finalPaper.final_paper) {
+        console.log("📄 Creating final paper message card");
+        const finalPaperMessage: Message = {
+          id: nanoid(),
+          threadId: threadId,
+          role: "assistant",
+          agent: "final_paper",
+          content: JSON.stringify({
+            title: "研究论文",
+            content: finalPaper.final_paper,
+            status: finalPaper.status,
+            paper_writing_mode: finalPaper.paper_writing_mode
+          }),
+          contentChunks: [finalPaper.final_paper],
+          isStreaming: false
+        };
+        
+        // Add the message to the message list
+        useStore.getState().appendMessage(finalPaperMessage);
+        console.log("✅ Final paper message card created with ID:", finalPaperMessage.id);
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to fetch final paper';
       console.error("❌ Error fetching final paper:", error);
@@ -263,7 +286,8 @@ function appendMessage(message: Message) {
     message.agent === "reporter" ||
     message.agent === "researcher" ||
     message.agent === "outline_writer" ||
-    message.agent === "paper_writer"
+    message.agent === "paper_writer" ||
+    message.agent === "references_writer"
   ) {
     if (!getOngoingResearchId()) {
       const id = message.id;
@@ -312,8 +336,13 @@ function appendMessage(message: Message) {
     
     console.log("📚 Total sections now (append):", useStore.getState().paperSections.length);
     
-    // Check if this might be the last paper_writer message and auto-fetch final paper
-    checkAndFetchFinalPaper(message.threadId);
+    // Note: Don't auto-fetch final paper here - wait for references_writer to complete
+  }
+  
+  if (message.agent === "references_writer" && !message.isStreaming) {
+    console.log("📚 References writer completed (append), triggering final paper fetch");
+    // Check if this might be the references completion and auto-fetch final paper
+    void checkAndFetchFinalPaper(message.threadId);
   }
   
   // Handle reporter in normal research workflow (not paper writing)
@@ -389,8 +418,13 @@ function updateMessage(message: Message) {
     
     console.log("📚 Total sections now (update):", useStore.getState().paperSections.length);
     
-    // Check if this might be the last paper_writer message and auto-fetch final paper
-    checkAndFetchFinalPaper(message.threadId);
+    // Note: Don't auto-fetch final paper here - wait for references_writer to complete
+  }
+  
+  if (message.agent === "references_writer" && !message.isStreaming) {
+    console.log("📚 References writer completed (update), triggering final paper fetch");
+    // Check if this might be the references completion and auto-fetch final paper
+    void checkAndFetchFinalPaper(message.threadId);
   }
   
   useStore.getState().updateMessage(message);
@@ -457,15 +491,20 @@ function checkAndFetchFinalPaper(threadId: string) {
       });
     }
     
-    // Check if there are any streaming paper_writer messages
-    const streamingPaperWriters = allMessages.filter(msg => 
-      msg.agent === "paper_writer" && msg.isStreaming
+    // Check if there are any streaming references_writer messages
+    const streamingReferencesWriters = allMessages.filter(msg => 
+      msg.agent === "references_writer" && msg.isStreaming
     );
     
     // Check if there are any streaming messages at all (indicating workflow is still active)
     const anyStreamingMessages = allMessages.some(msg => msg.isStreaming);
     
-    // Count completed paper writers
+    // Count completed references writers (should be 1 for paper writing workflow)
+    const completedReferencesWriters = allMessages.filter(msg => 
+      msg.agent === "references_writer" && !msg.isStreaming
+    );
+    
+    // Count completed paper writers for logging
     const completedPaperWriters = allMessages.filter(msg => 
       msg.agent === "paper_writer" && !msg.isStreaming
     );
@@ -475,79 +514,37 @@ function checkAndFetchFinalPaper(threadId: string) {
       hasPaperWriters,
       expectedSections,
       completedPaperWriters: completedPaperWriters.length,
-      streamingPaperWriters: streamingPaperWriters.length,
+      completedReferencesWriters: completedReferencesWriters.length,
+      streamingReferencesWriters: streamingReferencesWriters.length,
       anyStreamingMessages,
       totalSections: state.paperSections.length,
       finalPaper: !!state.finalPaper
     });
     
-    // Enhanced conditions for fetching final paper:
-    // 1. Has paper writers
-    // 2. No paper writers are streaming
-    // 3. No messages are streaming (workflow is idle)
-    // 4. Completed paper writers >= expected sections (all sections done)
+    // Updated conditions for fetching final paper:
+    // 1. Has paper writers (indicating paper writing workflow)
+    // 2. No references writers are streaming
+    // 3. Has completed references writer (references generation done)
+    // 4. No messages are streaming (workflow is idle)
     // 5. Don't already have a final paper
     const shouldFetch = (
       hasPaperWriters && 
-      streamingPaperWriters.length === 0 && 
+      streamingReferencesWriters.length === 0 && 
+      completedReferencesWriters.length > 0 &&
       !anyStreamingMessages && 
-      completedPaperWriters.length >= expectedSections &&
       !state.finalPaper
     );
     
     if (shouldFetch) {
-      console.log("📄 All expected paper sections completed, automatically fetching final paper for thread:", threadId);
-      console.log(`   ✅ Completed ${completedPaperWriters.length}/${expectedSections} expected sections`);
-      
-      // Fetch final paper and handle auto-opening Report interface
-      state.fetchFinalPaper(threadId).then(() => {
-        console.log("📄 Final paper fetched successfully, checking if should auto-open Report interface");
-        
-        const updatedState = useStore.getState();
-        if (updatedState.finalPaper) {
-          console.log("📄 Final paper available, auto-opening Report interface");
-          
-          // Check if research is already open
-          const currentResearchId = updatedState.ongoingResearchId;
-          if (currentResearchId) {
-            console.log("📄 Using existing research ID:", currentResearchId);
-            
-            // Ensure Report tab is available by adding a virtual reporter message if needed
-            const existingReportId = updatedState.researchReportIds.get(currentResearchId);
-            if (!existingReportId) {
-              console.log("📄 Creating virtual reporter message for Report tab");
-              const virtualReporterId = nanoid();
-              const virtualReporterMessage: Message = {
-                id: virtualReporterId,
-                threadId: threadId,
-                role: "assistant",
-                agent: "reporter",
-                content: "Paper writing completed. Final paper is ready for review.",
-                contentChunks: ["Paper writing completed. Final paper is ready for review."],
-                isStreaming: false
-              };
-              
-              // Add virtual reporter message
-              updatedState.appendMessage(virtualReporterMessage);
-              
-              // This will automatically register the reporter in researchReportIds through appendResearchActivity
-              console.log("📄 Virtual reporter message created with ID:", virtualReporterId);
-            }
-            
-            // Open the research interface to show Report tab
-            console.log("📄 Opening research interface to display final paper");
-            openResearch(currentResearchId);
-          } else {
-            console.log("⚠️ No ongoing research ID found, cannot auto-open Report interface");
-          }
-        }
-      }).catch(error => {
-        console.error("❌ Failed to fetch final paper:", error);
-      });
+      console.log("📄 References writer completed, automatically fetching final paper for thread:", threadId);
+      console.log(`   ✅ Completed ${completedPaperWriters.length}/${expectedSections} paper sections`);
+      console.log(`   ✅ Completed ${completedReferencesWriters.length} references generation`);
+      void state.fetchFinalPaper(threadId);
     } else {
       console.log("⏳ Not ready to fetch final paper yet:", {
-        needMoreSections: completedPaperWriters.length < expectedSections,
-        stillStreaming: streamingPaperWriters.length > 0 || anyStreamingMessages,
+        needReferencesWriter: completedReferencesWriters.length === 0,
+        referencesWriterStreaming: streamingReferencesWriters.length > 0,
+        stillStreaming: anyStreamingMessages,
         alreadyHasFinalPaper: !!state.finalPaper
       });
     }

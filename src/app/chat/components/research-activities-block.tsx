@@ -72,7 +72,14 @@ export function ResearchActivitiesBlock({
 function ActivityMessage({ messageId }: { messageId: string }) {
   const message = useMessage(messageId);
   if (message?.agent && message.content) {
-    if (message.agent !== "reporter" && message.agent !== "planner") {
+    // Filter out paper writing related agents from Activities display
+    if (
+      message.agent !== "reporter" && 
+      message.agent !== "planner" &&
+      message.agent !== "outline_writer" &&
+      message.agent !== "paper_writer" &&
+      message.agent !== "references_writer"
+    ) {
       // Special handling for thinking agent
       if (message.agent === "thinking") {
         return (

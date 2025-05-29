@@ -33,8 +33,6 @@ import {
   useMessageIds,
   useResearchMessage,
   useStore,
-  usePaperSections,
-  usePaperOutlineMessage,
 } from "~/core/store";
 import { parseJSON } from "~/core/utils";
 import { cn } from "~/lib/utils";
@@ -138,6 +136,7 @@ function MessageListItem({
       message.agent === "outline_writer" ||
       message.agent === "paper_writer" ||
       message.agent === "reporter" ||
+      message.agent === "final_paper" ||
       startOfResearch
     ) {
       let content: React.ReactNode;
@@ -175,6 +174,12 @@ function MessageListItem({
         content = (
           <div className="w-full px-4">
             <PaperWritingCard message={message} />
+          </div>
+        );
+      } else if (message.agent === "final_paper") {
+        content = (
+          <div className="w-full px-4">
+            <FinalPaperCard message={message} />
           </div>
         );
       } else if (message.agent === "reporter") {
@@ -706,6 +711,84 @@ function PaperWritingCard({
           </div>
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+function FinalPaperCard({
+  className,
+  message,
+}: {
+  className?: string;
+  message: Message;
+}) {
+  const isGenerating = useMemo(() => {
+    return message.isStreaming;
+  }, [message.isStreaming]);
+
+  const paperData = useMemo(() => {
+    try {
+      return parseJSON(message.content ?? "", {}) as {
+        title?: string;
+        content?: string;
+        status?: string;
+        paper_writing_mode?: boolean;
+      };
+    } catch {
+      return { title: "Final Report", content: message.content ?? "" };
+    }
+  }, [message.content]);
+
+  const handleDownload = useCallback(() => {
+    const content = paperData.content || message.content || "";
+    const title = paperData.title || "Final_Report";
+    
+    const blob = new Blob([content], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '_')}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [paperData, message.content]);
+
+  const hasContent = useMemo(() => {
+    return !!(paperData.content?.trim() || message.content?.trim());
+  }, [paperData.content, message.content]);
+
+  return (
+    <Card className={cn("w-full", className)}>
+      <CardHeader>
+        <div className="text-muted-foreground flex items-center gap-2 text-sm">
+          {isGenerating ? <LoadingOutlined /> : <FileText size={16} />}
+          <RainbowText animated={isGenerating}>
+            {isGenerating ? "Generating Final Report..." : (paperData.title || "Final Report")}
+          </RainbowText>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="prose prose-sm max-w-none">
+          <Markdown animated checkLinkCredibility>
+            {paperData.content || message.content || ""}
+          </Markdown>
+        </div>
+        {message.isStreaming && <LoadingAnimation className="my-4" />}
+      </CardContent>
+      <CardFooter className="flex justify-end">
+        {!isGenerating && hasContent && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDownload}
+            className="flex items-center gap-2"
+          >
+            <Download size={16} />
+            Download Report
+          </Button>
+        )}
+      </CardFooter>
     </Card>
   );
 }
