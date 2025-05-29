@@ -33,6 +33,16 @@ export function ResearchBlock({
   const reportStreaming = useStore((state) =>
     reportId ? (state.messages.get(reportId)?.isStreaming ?? false) : false,
   );
+  
+  // Debug logging for ResearchBlock
+  console.log("🔍 ResearchBlock render:", {
+    researchId,
+    reportId,
+    hasReport,
+    reportStreaming,
+    activeTab
+  });
+  
   const { isReplay } = useReplay();
   useEffect(() => {
     if (hasReport) {

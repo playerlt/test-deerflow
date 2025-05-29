@@ -4,7 +4,6 @@
 import { env } from "~/env";
 
 import type { MCPServerMetadata } from "../mcp";
-import type { Resource } from "../messages";
 import { extractReplayIdFromSearchParams } from "../replay/get-replay-id";
 import { fetchStream } from "../sse";
 import { sleep } from "../utils";
@@ -12,11 +11,32 @@ import { sleep } from "../utils";
 import { resolveServiceURL } from "./resolve-service-url";
 import type { ChatEvent } from "./types";
 
+// Type definition for final paper response
+export interface FinalPaperResponse {
+  thread_id: string;
+  final_paper: string;
+  paper_writing_mode: boolean;
+  status: string;
+}
+
+// Function to fetch final paper from backend
+export async function getFinalPaper(threadId: string): Promise<FinalPaperResponse> {
+  const response = await fetch(resolveServiceURL(`paper/${threadId}`));
+  
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error('No final paper found for this thread');
+    }
+    throw new Error('Failed to retrieve final paper');
+  }
+  
+  return response.json();
+}
+
 export async function* chatStream(
   userMessage: string,
   params: {
     thread_id: string;
-    resources?: Array<Resource>;
     auto_accepted_plan: boolean;
     max_plan_iterations: number;
     max_step_num: number;

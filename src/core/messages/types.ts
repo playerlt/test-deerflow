@@ -11,8 +11,11 @@ export interface Message {
     | "planner"
     | "researcher"
     | "coder"
+    | "thinking"
     | "reporter"
-    | "podcast";
+    | "podcast"
+    | "outline_writer"
+    | "paper_writer";
   role: MessageRole;
   isStreaming?: boolean;
   content: string;
@@ -21,7 +24,6 @@ export interface Message {
   options?: Option[];
   finishReason?: "stop" | "interrupt" | "tool_calls";
   interruptFeedback?: string;
-  resources?: Array<Resource>;
 }
 
 export interface Option {
@@ -35,9 +37,4 @@ export interface ToolCallRuntime {
   args: Record<string, unknown>;
   argsChunks?: string[];
   result?: string;
-}
-
-export interface Resource {
-  uri: string;
-  title: string;
 }

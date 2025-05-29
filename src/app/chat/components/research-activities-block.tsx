@@ -73,6 +73,26 @@ function ActivityMessage({ messageId }: { messageId: string }) {
   const message = useMessage(messageId);
   if (message?.agent && message.content) {
     if (message.agent !== "reporter" && message.agent !== "planner") {
+      // Special handling for thinking agent
+      if (message.agent === "thinking") {
+        return (
+          <div className="px-4 py-2">
+            <div className="mb-2">
+              <RainbowText
+                className="flex items-center text-base font-medium italic"
+                animated={message.isStreaming}
+              >
+                <PencilRuler size={16} className={"mr-2"} />
+                <span>{message.isStreaming ? "Deep Thinking..." : "Deep Analysis & Synthesis"}</span>
+              </RainbowText>
+            </div>
+            <Markdown animated checkLinkCredibility>
+              {message.content}
+            </Markdown>
+          </div>
+        );
+      }
+      
       return (
         <div className="px-4 py-2">
           <Markdown animated checkLinkCredibility>
@@ -276,8 +296,8 @@ function CrawlToolCall({ toolCall }: { toolCall: ToolCallRuntime }) {
 }
 
 function PythonToolCall({ toolCall }: { toolCall: ToolCallRuntime }) {
-  const code = useMemo<string | undefined>(() => {
-    return (toolCall.args as { code?: string }).code;
+  const code = useMemo<string>(() => {
+    return (toolCall.args as { code: string }).code;
   }, [toolCall.args]);
   const { resolvedTheme } = useTheme();
   return (
@@ -302,7 +322,7 @@ function PythonToolCall({ toolCall }: { toolCall: ToolCallRuntime }) {
               boxShadow: "none",
             }}
           >
-            {code?.trim() ?? ""}
+            {code.trim()}
           </SyntaxHighlighter>
         </div>
       </div>

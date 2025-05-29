@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
-import { chatStream, generatePodcast } from "../api";
-import type { Message, Resource } from "../messages";
+import { chatStream, generatePodcast, getFinalPaper, type FinalPaperResponse } from "../api";
+import type { Message } from "../messages";
 import { mergeMessage } from "../messages";
 import { parseJSON } from "../utils";
 
@@ -27,13 +27,31 @@ export const useStore = create<{
   ongoingResearchId: string | null;
   openResearchId: string | null;
 
+  // Paper writing state
+  paperSections: string[];
+  paperOutlineId: string | null;
+  completedPaperId: string | null;
+  finalPaper: FinalPaperResponse | null;
+  finalPaperLoading: boolean;
+  finalPaperError: string | null;
+
   appendMessage: (message: Message) => void;
   updateMessage: (message: Message) => void;
   updateMessages: (messages: Message[]) => void;
   openResearch: (researchId: string | null) => void;
   closeResearch: () => void;
   setOngoingResearch: (researchId: string | null) => void;
-}>((set) => ({
+  
+  // Paper writing methods
+  addPaperSection: (sectionContent: string) => void;
+  setPaperOutline: (outlineId: string) => void;
+  setCompletedPaper: (paperId: string) => void;
+  resetPaperState: () => void;
+  
+  // Final paper methods
+  fetchFinalPaper: (threadId: string) => Promise<void>;
+  clearFinalPaper: () => void;
+}>((set, get) => ({
   responding: false,
   threadId: THREAD_ID,
   messageIds: [],
@@ -44,6 +62,14 @@ export const useStore = create<{
   researchActivityIds: new Map<string, string[]>(),
   ongoingResearchId: null,
   openResearchId: null,
+  
+  // Paper writing state
+  paperSections: [],
+  paperOutlineId: null,
+  completedPaperId: null,
+  finalPaper: null,
+  finalPaperLoading: false,
+  finalPaperError: null,
 
   appendMessage(message: Message) {
     set((state) => ({
@@ -72,16 +98,56 @@ export const useStore = create<{
   setOngoingResearch(researchId: string | null) {
     set({ ongoingResearchId: researchId });
   },
+  
+  // Paper writing methods
+  addPaperSection(sectionContent: string) {
+    set((state) => ({
+      paperSections: [...state.paperSections, sectionContent],
+    }));
+  },
+  setPaperOutline(outlineId: string) {
+    console.log("🔧 Setting paper outline ID:", outlineId);
+    set({ paperOutlineId: outlineId });
+  },
+  setCompletedPaper(paperId: string) {
+    set({ completedPaperId: paperId });
+  },
+  resetPaperState() {
+    set({
+      paperSections: [],
+      completedPaperId: null,
+    });
+  },
+  
+  // Final paper methods
+  async fetchFinalPaper(threadId: string) {
+    console.log("🔄 fetchFinalPaper called for thread:", threadId);
+    set({ finalPaperLoading: true, finalPaperError: null });
+    try {
+      console.log("📡 Calling getFinalPaper API...");
+      const finalPaper = await getFinalPaper(threadId);
+      console.log("✅ getFinalPaper API response:", finalPaper);
+      console.log("📄 Final paper content length:", finalPaper.final_paper?.length || 0);
+      console.log("📄 Final paper preview:", finalPaper.final_paper?.substring(0, 200) + "...");
+      set({ finalPaper, finalPaperLoading: false });
+      console.log("✅ Final paper stored in state successfully");
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch final paper';
+      console.error("❌ Error fetching final paper:", error);
+      set({ finalPaperError: errorMessage, finalPaperLoading: false });
+    }
+  },
+  clearFinalPaper() {
+    set({ finalPaper: null, finalPaperError: null, finalPaperLoading: false });
+  },
 }));
 
 export async function sendMessage(
   content?: string,
   {
     interruptFeedback,
-    resources,
   }: {
     interruptFeedback?: string;
-    resources?: Array<Resource>;
   } = {},
   options: { abortSignal?: AbortSignal } = {},
 ) {
@@ -92,7 +158,6 @@ export async function sendMessage(
       role: "user",
       content: content,
       contentChunks: [content],
-      resources,
     });
   }
 
@@ -102,7 +167,6 @@ export async function sendMessage(
     {
       thread_id: THREAD_ID,
       interrupt_feedback: interruptFeedback,
-      resources,
       auto_accepted_plan: settings.autoAcceptedPlan,
       enable_background_investigation:
         settings.enableBackgroundInvestigation ?? true,
@@ -183,30 +247,311 @@ function findMessageByToolCallId(toolCallId: string) {
 }
 
 function appendMessage(message: Message) {
+  // Debug all messages
+  console.log("📨 appendMessage called:", {
+    id: message.id,
+    agent: message.agent,
+    role: message.role,
+    isStreaming: message.isStreaming,
+    contentLength: message.content?.length,
+    contentPreview: message.content?.substring(0, 100)
+  });
+
   if (
     message.agent === "coder" ||
+    message.agent === "thinking" ||
     message.agent === "reporter" ||
-    message.agent === "researcher"
+    message.agent === "researcher" ||
+    message.agent === "outline_writer" ||
+    message.agent === "paper_writer"
   ) {
     if (!getOngoingResearchId()) {
       const id = message.id;
+      console.log("🔬 Creating new research activity for agent:", message.agent, "with ID:", id);
       appendResearch(id);
       openResearch(id);
     }
+    console.log("🔬 Adding message to research activity:", {
+      agent: message.agent,
+      messageId: message.id,
+      researchId: getOngoingResearchId(),
+      isReporter: message.agent === "reporter"
+    });
     appendResearchActivity(message);
   }
+  
+  // Handle paper writing workflow
+  if (message.agent === "outline_writer" && !message.isStreaming) {
+    console.log("📋 Outline writer message detected (append), setting outline ID:", message.id);
+    console.log("📋 Outline content preview:", message.content?.substring(0, 200));
+    useStore.getState().setPaperOutline(message.id);
+    useStore.getState().resetPaperState(); // Reset sections when new outline is created
+  }
+  
+  if (message.agent === "paper_writer" && !message.isStreaming) {
+    // Extract section content from paper writer message
+    console.log("📝 Paper writer message detected (append):", {
+      agent: message.agent,
+      isStreaming: message.isStreaming,
+      contentLength: message.content?.length,
+      contentPreview: message.content?.substring(0, 100)
+    });
+    
+    // Try to parse as JSON first
+    const sectionData = parseJSON(message.content ?? "", {}) as { section_content?: string };
+    
+    if (sectionData.section_content) {
+      // JSON format with section_content field
+      console.log("✅ Adding section from JSON format (append)");
+      useStore.getState().addPaperSection(sectionData.section_content);
+    } else if (message.content?.trim()) {
+      // Plain text format - use the entire content as section content
+      console.log("✅ Adding section from plain text format (append)");
+      useStore.getState().addPaperSection(message.content);
+    }
+    
+    console.log("📚 Total sections now (append):", useStore.getState().paperSections.length);
+    
+    // Check if this might be the last paper_writer message and auto-fetch final paper
+    checkAndFetchFinalPaper(message.threadId);
+  }
+  
+  // Handle reporter in normal research workflow (not paper writing)
+  if (message.agent === "reporter" && !message.isStreaming) {
+    // Check if this is a paper writing workflow
+    const isPaperWritingWorkflow = Array.from(useStore.getState().messages.values())
+      .some(msg => msg.agent === "paper_writer" || msg.agent === "outline_writer");
+    
+    if (!isPaperWritingWorkflow) {
+      // This is a normal research workflow, handle normally
+      console.log("📄 Reporter message in normal research workflow (append)");
+    }
+    // Note: In paper writing workflow, reporter doesn't send messages to frontend
+    // so we handle final paper fetching in paper_writer completion instead
+  }
+  
   useStore.getState().appendMessage(message);
 }
 
 function updateMessage(message: Message) {
+  // Debug all message updates
+  console.log("🔄 updateMessage called:", {
+    id: message.id,
+    agent: message.agent,
+    role: message.role,
+    isStreaming: message.isStreaming,
+    contentLength: message.content?.length,
+    contentPreview: message.content?.substring(0, 100)
+  });
+
+  // Check if this is a paper writing workflow by looking for paper_writer messages
+  const isPaperWritingWorkflow = Array.from(useStore.getState().messages.values())
+    .some(msg => msg.agent === "paper_writer" || msg.agent === "outline_writer");
+
   if (
     getOngoingResearchId() &&
     message.agent === "reporter" &&
-    !message.isStreaming
+    !message.isStreaming &&
+    !isPaperWritingWorkflow  // Don't close research for paper writing workflow
   ) {
     useStore.getState().setOngoingResearch(null);
   }
+  
+  // Handle paper writing workflow updates
+  if (message.agent === "outline_writer" && !message.isStreaming) {
+    console.log("📋 Outline writer message detected (update), setting outline ID:", message.id);
+    console.log("📋 Outline content preview:", message.content?.substring(0, 200));
+    useStore.getState().setPaperOutline(message.id);
+    useStore.getState().resetPaperState(); // Reset sections when new outline is created
+  }
+  
+  if (message.agent === "paper_writer" && !message.isStreaming) {
+    // Extract section content from paper writer message
+    console.log("📝 Paper writer message detected (update):", {
+      agent: message.agent,
+      isStreaming: message.isStreaming,
+      contentLength: message.content?.length,
+      contentPreview: message.content?.substring(0, 100)
+    });
+    
+    // Try to parse as JSON first
+    const sectionData = parseJSON(message.content ?? "", {}) as { section_content?: string };
+    
+    if (sectionData.section_content) {
+      // JSON format with section_content field
+      console.log("✅ Adding section from JSON format (update)");
+      useStore.getState().addPaperSection(sectionData.section_content);
+    } else if (message.content?.trim()) {
+      // Plain text format - use the entire content as section content
+      console.log("✅ Adding section from plain text format (update)");
+      useStore.getState().addPaperSection(message.content);
+    }
+    
+    console.log("📚 Total sections now (update):", useStore.getState().paperSections.length);
+    
+    // Check if this might be the last paper_writer message and auto-fetch final paper
+    checkAndFetchFinalPaper(message.threadId);
+  }
+  
   useStore.getState().updateMessage(message);
+}
+
+// Helper function to check if all paper writers are done and fetch final paper
+function checkAndFetchFinalPaper(threadId: string) {
+  // Wait a bit to ensure all messages have been processed
+  setTimeout(() => {
+    const state = useStore.getState();
+    const allMessages = Array.from(state.messages.values());
+    
+    // Check if this is a paper writing workflow
+    const isPaperWritingWorkflow = allMessages.some(msg => 
+      msg.agent === "paper_writer" || msg.agent === "outline_writer"
+    );
+    
+    if (!isPaperWritingWorkflow) {
+      console.log("🚫 Not a paper writing workflow, skipping final paper fetch");
+      return;
+    }
+    
+    // Check if there are any paper_writer messages at all
+    const hasPaperWriters = allMessages.some(msg => msg.agent === "paper_writer");
+    
+    if (!hasPaperWriters) {
+      console.log("🚫 No paper_writer messages yet, skipping final paper fetch");
+      return;
+    }
+    
+    // Get the outline to estimate expected sections
+    const outlineMessage = allMessages.find(msg => msg.agent === "outline_writer" && !msg.isStreaming);
+    let expectedSections = 3; // Default minimum sections
+    
+    if (outlineMessage?.content) {
+      // Try to estimate expected sections from outline
+      const outlineContent = outlineMessage.content.toLowerCase();
+      
+      // Count section indicators in the outline
+      const sectionIndicators = [
+        /##\s+/g,  // Markdown h2 headers
+        /\d+\.\s+/g,  // Numbered sections
+        /section\s+\d+/g,  // "Section X" patterns
+        /第\s*[一二三四五六七八九十\d]+\s*[章节部分]/g,  // Chinese section patterns
+      ];
+      
+      let maxSectionCount = 0;
+      sectionIndicators.forEach(pattern => {
+        const matches = outlineContent.match(pattern);
+        if (matches) {
+          maxSectionCount = Math.max(maxSectionCount, matches.length);
+        }
+      });
+      
+      // Use the detected section count, but ensure minimum of 2 and maximum of 8
+      if (maxSectionCount > 0) {
+        expectedSections = Math.min(Math.max(maxSectionCount, 2), 8);
+      }
+      
+      console.log("📋 Outline analysis:", {
+        outlineLength: outlineContent.length,
+        detectedSections: maxSectionCount,
+        expectedSections
+      });
+    }
+    
+    // Check if there are any streaming paper_writer messages
+    const streamingPaperWriters = allMessages.filter(msg => 
+      msg.agent === "paper_writer" && msg.isStreaming
+    );
+    
+    // Check if there are any streaming messages at all (indicating workflow is still active)
+    const anyStreamingMessages = allMessages.some(msg => msg.isStreaming);
+    
+    // Count completed paper writers
+    const completedPaperWriters = allMessages.filter(msg => 
+      msg.agent === "paper_writer" && !msg.isStreaming
+    );
+
+    console.log("🔍 Checking paper writing completion:", {
+      isPaperWritingWorkflow,
+      hasPaperWriters,
+      expectedSections,
+      completedPaperWriters: completedPaperWriters.length,
+      streamingPaperWriters: streamingPaperWriters.length,
+      anyStreamingMessages,
+      totalSections: state.paperSections.length,
+      finalPaper: !!state.finalPaper
+    });
+    
+    // Enhanced conditions for fetching final paper:
+    // 1. Has paper writers
+    // 2. No paper writers are streaming
+    // 3. No messages are streaming (workflow is idle)
+    // 4. Completed paper writers >= expected sections (all sections done)
+    // 5. Don't already have a final paper
+    const shouldFetch = (
+      hasPaperWriters && 
+      streamingPaperWriters.length === 0 && 
+      !anyStreamingMessages && 
+      completedPaperWriters.length >= expectedSections &&
+      !state.finalPaper
+    );
+    
+    if (shouldFetch) {
+      console.log("📄 All expected paper sections completed, automatically fetching final paper for thread:", threadId);
+      console.log(`   ✅ Completed ${completedPaperWriters.length}/${expectedSections} expected sections`);
+      
+      // Fetch final paper and handle auto-opening Report interface
+      state.fetchFinalPaper(threadId).then(() => {
+        console.log("📄 Final paper fetched successfully, checking if should auto-open Report interface");
+        
+        const updatedState = useStore.getState();
+        if (updatedState.finalPaper) {
+          console.log("📄 Final paper available, auto-opening Report interface");
+          
+          // Check if research is already open
+          const currentResearchId = updatedState.ongoingResearchId;
+          if (currentResearchId) {
+            console.log("📄 Using existing research ID:", currentResearchId);
+            
+            // Ensure Report tab is available by adding a virtual reporter message if needed
+            const existingReportId = updatedState.researchReportIds.get(currentResearchId);
+            if (!existingReportId) {
+              console.log("📄 Creating virtual reporter message for Report tab");
+              const virtualReporterId = nanoid();
+              const virtualReporterMessage: Message = {
+                id: virtualReporterId,
+                threadId: threadId,
+                role: "assistant",
+                agent: "reporter",
+                content: "Paper writing completed. Final paper is ready for review.",
+                contentChunks: ["Paper writing completed. Final paper is ready for review."],
+                isStreaming: false
+              };
+              
+              // Add virtual reporter message
+              updatedState.appendMessage(virtualReporterMessage);
+              
+              // This will automatically register the reporter in researchReportIds through appendResearchActivity
+              console.log("📄 Virtual reporter message created with ID:", virtualReporterId);
+            }
+            
+            // Open the research interface to show Report tab
+            console.log("📄 Opening research interface to display final paper");
+            openResearch(currentResearchId);
+          } else {
+            console.log("⚠️ No ongoing research ID found, cannot auto-open Report interface");
+          }
+        }
+      }).catch(error => {
+        console.error("❌ Failed to fetch final paper:", error);
+      });
+    } else {
+      console.log("⏳ Not ready to fetch final paper yet:", {
+        needMoreSections: completedPaperWriters.length < expectedSections,
+        stillStreaming: streamingPaperWriters.length > 0 || anyStreamingMessages,
+        alreadyHasFinalPaper: !!state.finalPaper
+      });
+    }
+  }, 3000); // Increased wait time to 3 seconds for better stability
 }
 
 function getOngoingResearchId() {
@@ -241,6 +586,13 @@ function appendResearch(researchId: string) {
 
 function appendResearchActivity(message: Message) {
   const researchId = getOngoingResearchId();
+  console.log("🔬 appendResearchActivity called:", {
+    messageId: message.id,
+    agent: message.agent,
+    researchId: researchId,
+    isReporter: message.agent === "reporter"
+  });
+  
   if (researchId) {
     const researchActivityIds = useStore.getState().researchActivityIds;
     const current = researchActivityIds.get(researchId)!;
@@ -253,6 +605,10 @@ function appendResearchActivity(message: Message) {
       });
     }
     if (message.agent === "reporter") {
+      console.log("📄 Adding reporter message to researchReportIds:", {
+        researchId,
+        messageId: message.id
+      });
       useStore.setState({
         researchReportIds: new Map(useStore.getState().researchReportIds).set(
           researchId,
@@ -260,6 +616,8 @@ function appendResearchActivity(message: Message) {
         ),
       });
     }
+  } else {
+    console.log("⚠️ No researchId found for message:", message.id, message.agent);
   }
 }
 
@@ -392,4 +750,37 @@ export function useToolCalls() {
         .flat();
     }),
   );
+}
+
+// Paper writing hooks
+export function usePaperSections() {
+  return useStore(useShallow((state) => state.paperSections));
+}
+
+export function usePaperOutlineId() {
+  const outlineId = useStore(useShallow((state) => state.paperOutlineId));
+  console.log("🔍 usePaperOutlineId called, returning:", outlineId);
+  return outlineId;
+}
+
+export function useCompletedPaperId() {
+  return useStore(useShallow((state) => state.completedPaperId));
+}
+
+export function usePaperOutlineMessage() {
+  const outlineId = usePaperOutlineId();
+  return useMessage(outlineId);
+}
+
+// Final paper hooks
+export function useFinalPaper() {
+  return useStore(useShallow((state) => state.finalPaper));
+}
+
+export function useFinalPaperLoading() {
+  return useStore(useShallow((state) => state.finalPaperLoading));
+}
+
+export function useFinalPaperError() {
+  return useStore(useShallow((state) => state.finalPaperError));
 }

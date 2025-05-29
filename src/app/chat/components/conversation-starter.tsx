@@ -10,7 +10,7 @@ import { Welcome } from "./welcome";
 const questions = [
   "How many times taller is the Eiffel Tower than the tallest building in the world?",
   "How many years does an average Tesla battery last compared to a gasoline engine?",
-  "How many liters of water are required to produce 1 kg of beef?",
+  "撰写一篇关于人工智能在医疗诊断中应用的学术论文，包括文献综述、技术分析和未来展望",
   "How many times faster is the speed of light compared to the speed of sound?",
 ];
 export function ConversationStarter({
